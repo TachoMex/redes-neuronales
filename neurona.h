@@ -15,6 +15,15 @@ double sigmoidalp(double x){
 	double s =  sigmoidal(x);
 	return s*(1-s);
 }
+double escalon(double x){
+	return tanh(x)*0.5+0.5;
+}
+
+double escalonp(double x){
+	double ex = exp(x);
+	double ex2 = 2.0*ex/(1.0+ex*ex);
+	return ex2 * ex2;
+}
 
 
 class Neurona{
@@ -27,7 +36,6 @@ public:
 	virtual void propagarError() = 0;
 	virtual void recibeGradiente(double) = 0;
 	virtual void muestraTopologia() = 0;
-//	virtual double entrena(double, double, double);
 };
 
 int Neurona::cont_id = 0;
@@ -39,7 +47,6 @@ public:
 		this->id = Neurona::cont_id ++;
 	}
 	virtual double salida(){
-		//std::cout<<":v si entro "<<this->dato<<std::endl;
 		return this->dato;
 	}
 	virtual bool calculado(){
@@ -51,8 +58,7 @@ public:
 	virtual void propagarError(){
 
 	}
-	virtual void recibeGradiente(double x){
-
+	virtual void recibeGradiente(double g){
 	}
 	virtual void muestraTopologia(){
 		std::cout<<"<Entrada id="<<this<<">"<<std::endl;
@@ -69,20 +75,20 @@ public:
 	}
 };
 
-class NeuronaOculta{
+class NeuronaOculta :public NeuronaEntrada{
 public:
 	double bias;
 	std::vector<Dendrita> entradas;
-	//double (*sigmoidal)(double);
+	double gradiente;
+	//double (*escalon)(double);
 	double calculo;
 	double activacion;
 	bool calculado_;
-	double gradiente;
 	void agregarEntrada(Neurona* n, double peso=0){
 		entradas.push_back(Dendrita(n, peso));
 	}
 	virtual double salida(){
-		//std::cout<<"Calculando salida de neurona en "<<this<<std::endl;
+		// std::cout<<"Calculando salida de neurona en "<<this<<std::endl;
 		if(not calculado_){
 			calculo = bias;
 			for(Dendrita& d: entradas){
@@ -90,7 +96,7 @@ public:
 				calculo+=d.peso*d.neurona->salida();
 			}
 			calculado_ = true;
-			return activacion = sigmoidal(calculo);
+			return activacion = escalon(calculo);
 		}
 		return activacion;
 	}
@@ -103,18 +109,20 @@ public:
 		gradiente = 0.0;
 	}
 	virtual void recibeGradiente(double g){
+		// std::cout<<this<<":: recibeGradiente "<<g<<std::endl;
 		this->gradiente += g;
 	}	
 	virtual void propagarError(){
-		for(Dendrita& d: entradas){
-			d.neurona->recibeGradiente(gradiente * d.peso);
+		for(unsigned i = 0; i < entradas.size(); i++){
+			// std::cout<<this<<" propagarError::"<<entradas[i].peso<<"::"<<entradas.size()<<std::endl;
+			entradas[i].neurona->recibeGradiente(this -> gradiente * entradas[i].peso);
 		}
 	}
 	virtual void ajustaPesos(double etha){
-		this->gradiente  *= sigmoidalp(this->calculo);
-		double dw = etha * this -> gradiente * this -> activacion;
-		// std::cout<<"Ajuste: "<<dw<<std::endl;
+		this->gradiente *= escalonp(this->calculo);
+		double dw = etha * this -> gradiente * std::abs(this -> activacion);
 		bias += dw; 
+		std::cout<<"Ajusta pesos NO "<<etha<<","<<this->gradiente<<","<<this->activacion<<","<<dw<<"::"<<std::endl;
 		for(Dendrita& d: entradas){
 			d.peso += dw;
 		}
@@ -123,7 +131,7 @@ public:
 	virtual void muestraTopologia(){
 		std::cout<<"<Oculta id="<<this<<" etradas={ ";
 		for(unsigned i=0;i<entradas.size();i++){
-			std::cout<<"("<<entradas[i].neurona<<","<<entradas[i].peso<<") ";
+			// std::cout<<"("<<entradas[i].neurona<<","<<entradas[i].peso<<") ";
 		}
 		std::cout<<"} bias="<<this->bias;
 		std::cout<<">"<<std::endl;
@@ -134,13 +142,14 @@ public:
 
 class NeuronaSalida: public NeuronaOculta{
 public:
-	void ajustaError(double y){
-		this -> gradiente = sigmoidalp(this -> calculo) * (activacion - y);
+	virtual void ajustaError(double y){
+		this -> gradiente = (y - this->activacion);
 	}
 
-	void ajustaPesos(double etha){
-		double dw = etha * this -> gradiente * this -> activacion;
+	virtual void ajustaPesos(double etha){
+		double dw = etha * this -> gradiente * std::abs(this -> activacion);
 		bias += dw; 
+		std::cout<<"Ajusta pesos "<<etha<<","<<this->gradiente<<","<<this->activacion<<","<<dw<<"::"<<std::endl;
 		for(Dendrita& d: entradas){
 			d.peso += dw;
 		}
@@ -155,6 +164,25 @@ public:
 		std::cout<<">"<<std::endl;
 	}
 
+	virtual double salida(){
+		if(not calculado_){
+			calculo = bias;
+			for(Dendrita& d: entradas){
+				// std::cout<<":vvvv"<<std::endl;
+				calculo+=d.peso*d.neurona->salida();
+			}
+			this -> calculado_ = true;
+			return activacion = calculo;
+		}
+		return activacion;
+	}
+	virtual void propagarError(){
+		for(unsigned i = 0; i < entradas.size(); i++){
+			// std::cout<<this<<" propagarErrorSalida::"<<entradas[i].peso<<"::"<<entradas.size()<<std::endl;
+			entradas[i].neurona->recibeGradiente(this -> gradiente * entradas[i].peso);
+		}
+	}
+
 };
 
 class RedNeuronal{
@@ -164,10 +192,13 @@ public:
 	std::vector<NeuronaSalida*> neuronasSalida;
 
 	double etha;
+	double aprendizaje;
 	double error;
+	double errorPrevio;
 
 	RedNeuronal(int entradas, int salidas, int capasIntermedias,const int cantidades[], double e){
 		etha = e;
+		aprendizaje = e;
 		for(int i=0;i<entradas;i++){
 			neuronasEntrada.push_back(new NeuronaEntrada());
 		}
@@ -184,18 +215,18 @@ public:
 			for(int j=0;j<cantidades[i];j++){
 				NeuronaOculta* n = new NeuronaOculta();
 				n->bias = urandom();
-				for(int k = inicioCapa; k<cantidades[i-1]; k++){
-					n->agregarEntrada((Neurona*)neuronasIntermedias[k],urandom());
+				for(int k = 0; k<cantidades[i-1]; k++){
+					n->agregarEntrada(neuronasIntermedias[inicioCapa + k],urandom());
 				}
 				neuronasIntermedias.push_back(n);
 			}
-			inicioCapa = neuronasIntermedias.size()-1;
+			inicioCapa += cantidades[i-1];
 		}
 		for(int i=0;i<salidas;i++){
 			NeuronaSalida* n = new NeuronaSalida();
 			n->bias = urandom();
-			for(int j = 0; j<cantidades[capasIntermedias-1]; j++){
-				n->agregarEntrada((Neurona*)neuronasIntermedias[inicioCapa+j-1], urandom());
+			for(unsigned j = inicioCapa; j<neuronasIntermedias.size(); j++){
+				n->agregarEntrada(neuronasIntermedias[j], urandom());
 			}
 			neuronasSalida.push_back(n);
 		}
@@ -211,7 +242,8 @@ public:
 	}
 
 	void inicializaError(){
-		error = 10000;
+		errorPrevio = error;
+		error = 0;
 	}
 
 	double evalua(double input){
@@ -221,18 +253,22 @@ public:
 	}
 
 	void entrena(double input, double output){
-		evalua(input);
-		// std::cout<<":v"<<std::endl;
+		double y = evalua(input);
+		std::cout<<(output - y)<<std::endl;
+		error += 0.5 * (output - y) * (output - y);
 		neuronasSalida[0]->ajustaError(output);
-		neuronasSalida[0]->ajustaPesos(etha);
+		neuronasSalida[0]->ajustaPesos(aprendizaje);
 		neuronasSalida[0]->propagarError();
 		for(int i = neuronasIntermedias.size() - 1; i >= 0 ; --i){
-			neuronasIntermedias[i]->ajustaPesos(etha);
+			neuronasIntermedias[i]->ajustaPesos(aprendizaje);
 			neuronasIntermedias[i]->propagarError();
 		}
-
 	}
-
+	void ajustaAprendizaje(){
+		if(error > errorPrevio){	
+			aprendizaje *= etha;
+		}
+	}
 
 	double errorMedio(){
 		return error;
